@@ -115,8 +115,8 @@ class Stock:
             ax_rsi.plot(self.ticker.index, self.ticker.RSI, label="RSI")
             legends_rsi = ["RSI"]
             if ref_stock is not None and ref_stock.ticker is not None:
-                ax_rsi.plot(ref_stock.ticker.index, ref_stock.ticker.RSI, label="Ref_RSI")
-                legends_rsi.append("Ref_RSI")
+                ax_rsi.plot(ref_stock.ticker.index, ref_stock.ticker.RSI, label="ref_RSI")
+                legends_rsi.append("ref_RSI")
             ax_rsi.legend(legends_rsi)
 
     def get_value(self) -> float:
