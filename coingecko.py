@@ -107,6 +107,10 @@ class Coingecko:
                 return "BRIDGET-XXX"
         return ""
 
+    def is_valid_alt_coin(self, symbol: str) -> bool:
+        """Return True if the coin is a valid altcoin (not a stablecoin, ETH, BTC, or wrapped token)."""
+        return self.get_coin_category(symbol) == ""
+
     def get_coin_category(self, symbol: str) -> str:
         """Get a coin's category, using cache to avoid unnecessary API calls."""
         symbol = symbol.upper()
