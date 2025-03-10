@@ -71,7 +71,7 @@ class CryptoStock(Stock):
         Construct the Binance trading pair symbol.
         Currently concatenates asset and underlying symbol (e.g. 'BTCUSDT').
         """
-        return f"{self.name.upper()}{config.underlying_symb}"
+        return f"{self.name.upper()}{config.underlying_symbol}"
 
     def _get_base_asset(self, asset: str) -> str:
         """
@@ -80,15 +80,14 @@ class CryptoStock(Stock):
         USD_coins = {"MIOTA"}
         if asset in USD_coins:
             return "USD"
-        logger.debug(f"{asset}:{config.underlying_symb}")
-        return config.underlying_symb
+        logger.debug(f"{asset}:{config.underlying_symbol}")
+        return config.underlying_symbol
 
     def _minutes_of_new_data(self, symbol: str, kline_size: str, data: pd.DataFrame, source: str) -> Tuple[dt.datetime, dt.datetime]:
         """
-        Calculate the time range for new data based on the latest timestamp in `data`
-        and the most recent data from Binance.
-        If the local history is empty, query Binance for the very first available kline
-        (using an arbitrarily early start string) so that the start date reflects the actual history.
+        Calculate the time range for new data. If the local history is empty,
+        query Binance for the earliest kline. If Binance raises an invalid symbol error,
+        mark the coin as untradable and use the current time as the fallback.
         """
         if source != "binance":
             raise ValueError(f"Unexpected data source {source}")
@@ -96,18 +95,68 @@ class CryptoStock(Stock):
         if not data.empty:
             old = parser.parse(data["timestamp"].iloc[-1])
         else:
-            # Query Binance for the earliest available kline for this symbol.
-            first_klines = bclient.client.get_historical_klines(symbol, kline_size, "1 Jan 1970", limit=1)
-            if first_klines and len(first_klines) > 0:
-                old = pd.to_datetime(first_klines[0][0], unit="ms")
-            else:
-                raise ValueError(f"No historical data available for {symbol} from Binance.")
+            try:
+                first_klines = bclient.client.get_historical_klines(symbol, kline_size, "1 Jan 1970", limit=1)
+                if first_klines and len(first_klines) > 0:
+                    old = pd.to_datetime(first_klines[0][0], unit="ms")
+                else:
+                    raise ValueError(f"No historical data available for {symbol} from Binance.")
+            except Exception as e:
+                if hasattr(e, 'code') and e.code == -1121:
+                    logger.error(f"Invalid symbol {symbol} on Binance. Marking as untradable.")
+                    self._mark_untradable(symbol)
+                    old = dt.datetime.now()
+                else:
+                    raise
 
-        # Get the latest available kline timestamp (assumed to be in milliseconds)
-        klines = bclient.client.get_klines(symbol=symbol, interval=kline_size)
-        new = pd.to_datetime(klines[-1][0], unit="ms")
+        try:
+            klines = bclient.client.get_klines(symbol=symbol, interval=kline_size)
+            new = pd.to_datetime(klines[-1][0], unit="ms")
+        except Exception as e:
+            if hasattr(e, 'code') and e.code == -1121:
+                logger.error(f"Invalid symbol {symbol} on Binance during latest kline fetch. Marking as untradable.")
+                self._mark_untradable(symbol)
+                new = dt.datetime.now()
+            else:
+                raise
+
         logger.info(f"Time range for {symbol}: {old} to {new}")
         return old, new
+
+    def _mark_untradable(self, symbol: str) -> None:
+        """
+        Append the given symbol with the current date to the untradable list.
+        """
+        filename = "data/untradable_coins.csv"
+        os.makedirs(os.path.dirname(filename), exist_ok=True)
+        now_str = dt.datetime.now().strftime("%Y-%m-%d")
+        try:
+            df = pd.read_csv(filename)
+        except FileNotFoundError:
+            df = pd.DataFrame(columns=["symbol", "date_added"])
+        if symbol not in df["symbol"].values:
+            new_row = pd.DataFrame({"symbol": [symbol], "date_added": [now_str]})
+            df = pd.concat([df, new_row], ignore_index=True)
+            df.to_csv(filename, index=False)
+            logger.info(f"Marked {symbol} as untradable on {now_str}.")
+
+    @staticmethod
+    def is_tradable(symbol: str) -> bool:
+        """
+        Returns False if the coin is listed in the untradable file and the time elapsed
+        since it was added is less than 3 months; otherwise, returns True.
+        """
+        filename = "data/untradable_coins.csv"
+        if not os.path.isfile(filename):
+            return True
+        df = pd.read_csv(filename)
+        coin_row = df[df["symbol"] == f"{symbol}USDT"]
+        if coin_row.empty:
+            return True
+        date_added = pd.to_datetime(coin_row.iloc[0]["date_added"])
+        if (dt.datetime.now() - date_added).days < 90:
+            return False
+        return True
 
     def _get_all_binance(self, symbol: str, kline_size: str, save: bool = False) -> pd.DataFrame:
         """
@@ -272,7 +321,19 @@ class CryptoStockSim(CryptoStock):
 
 if __name__ == "__main__":
     bclient.set_key("binance_crypto_l3ro")
-    s = CryptoStock("BTC", "USDT", qty=0)
-    fig, ax = plt.subplots(1, figsize=(10, 8))
-    s.draw(ax)
-    plt.show()
+    #s = CryptoStock("BTC", qty=0)
+    #fig, ax = plt.subplots(1, figsize=(10, 8))
+    #s.draw(ax)
+    #plt.show()
+    from coingecko import Coingecko
+    cg = Coingecko()
+    top_coins = cg.get_top_250_coins()
+    for coin in top_coins:
+        if not CryptoStock.is_tradable(coin['symbol']):
+            print(f"skip {coin}")
+            continue
+        print(coin)
+        try:
+            s = CryptoStock(coin['symbol'], qty=0)
+        except:
+            continue
