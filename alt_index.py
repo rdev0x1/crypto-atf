@@ -10,6 +10,8 @@ from crypto_stock import CryptoStock
 class AltIndex(Stock):
     def __init__(self):
         self.nb_assets = 10
+        self.top10_coins = {}
+        self.top10_date = None
         self.cg = Coingecko()
 
     def _get_valid_top_coins(self):
@@ -21,6 +23,46 @@ class AltIndex(Stock):
             coin['symbol'] for coin in top_coins
             if CryptoStock.is_tradable(coin['symbol']) and self.cg.is_valid_alt_coin(coin['symbol'])
         ]
+
+    def get_previous_month_end_date(self, date=None):
+        if date is None:
+            date = dt.datetime.now()
+        first_day_current_month = date.replace(day=1)
+        return (first_day_current_month - dt.timedelta(days=1)).date()
+
+    def _get_market_caps_for_date(self, date):
+        market_caps = {}
+        for coin in self._get_valid_top_coins():
+            ticker = self.cg.get_marketcap_history(coin)
+            ticker.index = pd.to_datetime(ticker.index)
+            market_caps[coin] = ticker.loc[str(date), 'market_cap'] if str(date) in ticker.index else 0
+        return market_caps
+
+    def get_current_top_10_coins(self):
+        top10_date = self.get_previous_month_end_date()
+
+        if top10_date == self.top10_date and self.top10_coins:
+            return self.top10_coins
+
+        market_caps = self._get_market_caps_for_date(top10_date)
+        sorted_coins = sorted(market_caps.items(), key=lambda x: x[1], reverse=True)[:self.nb_assets]
+
+        total_market_cap = sum(cap for _, cap in sorted_coins)
+        self.top10_coins = {
+            coin: {'market_cap': cap, 'weight': cap / total_market_cap if total_market_cap else 0}
+            for coin, cap in sorted_coins
+        }
+
+        self.top10_date = top10_date
+        return self.top10_coins
+
+    def get_today_price(self):
+        today = pd.Timestamp(dt.datetime.now().date())
+
+        if today not in self.ticker.index:
+            raise ValueError(f"Today's date ({today.date()}) is not found in the ticker index. Data may be outdated or incomplete.")
+
+        return self.ticker.loc[today, 'close']
 
     def _build_market_cap_per_date(self):
         """

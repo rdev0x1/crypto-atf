@@ -1,7 +1,7 @@
 import logging
 from copy import deepcopy
 from typing import Optional
-
+import datetime as dt
 import matplotlib.pyplot as plt
 import pandas as pd
 
@@ -87,6 +87,11 @@ class Stock:
     def compute_average_rsi(self) -> None:
         self.ticker['ARSI'] = self.ticker['RSI'].rolling(window=5, min_periods=5).mean()
 
+    def get_ARSI(self):
+        today = pd.Timestamp(dt.datetime.now().date())
+        if today not in self.ticker.index:
+            raise ValueError(f"No data found for {today} in ticker.")
+        return self.ticker.loc[today, 'ARSI']
 
     def draw(
         self,
