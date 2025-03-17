@@ -1,5 +1,7 @@
 import os
 import json
+from datetime import datetime, timedelta
+import pandas as pd
 from crypto_stock import CryptoStock
 from binance_client import bclient
 from config_atf import ConfigATF
@@ -53,6 +55,23 @@ class Portfolio:
 
     def get_value(self, share=1.0):
         return sum(stock.get_value() for stock in self.stocks.values()) + share * self.cash_reserve
+
+    def get_realtime_index_price(self):
+        """
+        Computes real-time alt index price from Binance's current coin prices.
+        This provides an immediate price update as opposed to the daily historical prices from CoinGecko.
+        """
+        price = 0
+        for asset, data in self.alt_index.get_current_top_10_coins().items():
+            weight = data['weight']
+            asset_price = data['price']
+            market_cap = data['market_cap']
+
+            stock = self.stocks.get(asset, CryptoStock(asset, 0))
+            current_price = stock.get_coin_price()
+            current_market_cap = market_cap/asset_price * current_price
+            price += current_market_cap/self.alt_index.initial_total_market_cap()
+        return price
 
     def _load_state(self):
         if os.path.exists(self.STATE_FILE):
@@ -147,16 +166,51 @@ class Portfolio:
         self._save_state()
 
     def get_sl_signal(self, cfg, rsi):
+        """
+        Compute stop loss signal with is the current price divided by the
+        maximum index price we got over the previous X days defined in
+        cfg.win_sl
+        """
         if rsi < cfg.rsi_min_thresh:
             return False
 
-        recent_prices = self.alt_index.ticker[-cfg.win_sl:]['close']
-        v_max = recent_prices.max()
-        v_current = recent_prices.iloc[-1]
+        # Load historical max prices if not already loaded
+        max_prices_file = "data/daily_max_prices.json"
+        if not hasattr(self, '_daily_max_prices'):
+            if os.path.exists(max_prices_file):
+                with open(max_prices_file, 'r') as f:
+                    self._daily_max_prices = json.load(f)
+            else:
+                self._daily_max_prices = {}
+
+        today = datetime.utcnow().date().isoformat()
+        realtime_price = self.get_realtime_index_price()
+
+        # Update today's max price
+        previous_max = self._daily_max_prices.get(today, 0)
+        if realtime_price > previous_max:
+            self._daily_max_prices[today] = realtime_price
+            with open(max_prices_file, 'w') as f:
+                json.dump(self._daily_max_prices, f)
+
+        # Compute maximum over the sliding window of win_sl days
+        recent_dates = [
+            (datetime.utcnow().date() - timedelta(days=i)).isoformat()
+            for i in range(cfg.win_sl)
+        ]
+        recent_prices_from_history = self.alt_index.ticker[-cfg.win_sl:]['close'].to_dict()
+
+        v_max = max(
+            max(self._daily_max_prices.get(date, 0), recent_prices_from_history.get(pd.Timestamp(date), 0))
+            for date in recent_dates
+        )
 
         if v_max == 0:
             return False
-        return v_current / v_max < cfg.tresh
+
+        drop_ratio = realtime_price / v_max
+        print(f"drop ratio={drop_ratio:.4f}")
+        return drop_ratio < cfg.tresh
 
     def print(self):
         stock_details = ", ".join(f"{a}:{s.quantity:.03f}" for a, s in self.stocks.items())

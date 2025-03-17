@@ -123,6 +123,7 @@ class BotATF:
         today = datetime.utcnow().date()
         days_passed = (today - self.last_update_date).days
 
+        print(f"ARSI={arsi}")
         if days_passed > 0:
             self.BD_in_cool = max(0, self.BD_in_cool - 1)
             self.SL_in_cool = max(0, self.SL_in_cool - 1)
